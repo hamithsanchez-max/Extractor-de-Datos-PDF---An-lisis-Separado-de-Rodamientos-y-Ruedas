@@ -1,0 +1,7 @@
+streamlit
+pdfplumber
+pandas
+openpyxl
+matplotlib
+seaborn
+pdf2image
