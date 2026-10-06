@@ -194,14 +194,14 @@ if uploaded_file is not None:
                             x=df_sorted["Eje_Num"],
                             y=df_sorted[b_east_col],
                             name=f"Bearing East ({b_east_col})",
-                            marker_color="#EF553B"
+                            marker_color="#D62728"
                         ))
                     if b_west_col != "Ninguna":
                         fig_bearing.add_trace(go.Bar(
                             x=df_sorted["Eje_Num"],
                             y=df_sorted[b_west_col],
                             name=f"Bearing West ({b_west_col})",
-                            marker_color="#FFA15A"
+                            marker_color="#1F77B4"
                         ))
                     
                     fig_bearing.update_layout(
