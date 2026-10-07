@@ -79,13 +79,21 @@ uploaded_file = st.sidebar.file_uploader("Selecciona un archivo PDF", type=["pdf
 
 if uploaded_file is not None:
     try:
+        # --- CAPTURA DEL TÍTULO / NOMBRE DEL ARCHIVO PDF ---
+        pdf_title = uploaded_file.name
+        
         file_bytes = uploaded_file.read()
         df_raw = parse_pdf(file_bytes)
         
         if df_raw.empty:
-            st.warning("⚠️ No se pudieron extraer datos del PDF. Verifica que el reporte sea un documento de detectores wayside.")
+            st.warning(f"⚠️ No se pudieron extraer datos del archivo **{pdf_title}**. Verifica que el reporte sea un documento de detectores wayside.")
         else:
-            st.sidebar.success("✅ ¡PDF procesado con éxito!")
+            # Notificación en la barra lateral con el nombre del archivo
+            st.sidebar.success(f"✅ ¡Procesado con éxito!")
+            st.sidebar.info(f"📄 **Archivo activo:**\n`{pdf_title}`")
+            
+            # --- MOSTRAR TÍTULO DEL ARCHIVO EN EL ÁREA PRINCIPAL ---
+            st.info(f"📋 **Reporte Analizado:** `{pdf_title}`")
             
             tab_dash, tab_data, tab_settings = st.tabs([
                 "📊 Gráficas Separadas (Bearing vs Wheel)", 
@@ -147,14 +155,14 @@ if uploaded_file is not None:
                 # Resumen superior de alarmas
                 alarms_df = df_sorted[df_sorted["Has_Alarm"]]
                 if not alarms_df.empty:
-                    st.error(f"🚨 **Se registraron {len(alarms_df)} alarma(s) en el reporte:**")
+                    st.error(f"🚨 **Se registraron {len(alarms_df)} alarma(s) en el reporte {pdf_title}:**")
                     alarm_list_str = ", ".join([f"**Eje {row['Eje_Num']}**: {row['Alarm_Text']}" for _, row in alarms_df.iterrows()])
                     st.markdown(alarm_list_str)
 
                 st.write("---")
 
-                # SECCIÓN 1: BEARINGS (CON INDICACIÓN DE ALARMAS DE BEARING/HOT BOX)
-                st.subheader("🔥 1. Lecturas de Rodamientos (Bearings: East vs West)")
+                # SECCIÓN 1: BEARINGS
+                st.subheader(f"🔥 1. Lecturas de Rodamientos - {pdf_title}")
                 
                 fig_bearing = go.Figure()
                 fig_bearing.add_trace(go.Bar(
@@ -190,7 +198,7 @@ if uploaded_file is not None:
 
                 fig_bearing.update_layout(
                     barmode="group",
-                    title="Comparativa de Temperatura en Rodamientos (Bearing East vs Bearing West) por Eje",
+                    title=f"Comparativa de Temperatura en Rodamientos ({pdf_title})",
                     xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 150.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
@@ -201,8 +209,8 @@ if uploaded_file is not None:
 
                 st.write("---")
                 
-                # SECCIÓN 2: WHEELS (CON INDICACIÓN DE ALARMAS DE WHEEL/HOT WHEEL)
-                st.subheader("🛞 2. Lecturas de Ruedas (Wheels: East vs West)")
+                # SECCIÓN 2: WHEELS
+                st.subheader(f"🛞 2. Lecturas de Ruedas - {pdf_title}")
                 
                 fig_wheel = go.Figure()
                 fig_wheel.add_trace(go.Bar(
@@ -238,7 +246,7 @@ if uploaded_file is not None:
 
                 fig_wheel.update_layout(
                     barmode="group",
-                    title="Comparativa de Temperatura en Ruedas (Wheel East vs Wheel West) por Eje",
+                    title=f"Comparativa de Temperatura en Ruedas ({pdf_title})",
                     xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 150.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
@@ -298,14 +306,16 @@ if uploaded_file is not None:
                     st.caption("📌 **Pie de página:** Proporción acumulada global del calor en ruedas entre el lado Este (púrpura) y Oeste (verde).")
 
             with tab_data:
-                st.subheader("Tabla de Datos Extraídos")
+                st.subheader(f"Tabla de Datos Extraídos - {pdf_title}")
                 st.dataframe(df_clean, use_container_width=True)
                 
+                # Nombre dinámico del archivo CSV para descarga
+                csv_filename = f"reporte_{pdf_title.replace('.pdf', '')}.csv"
                 csv_data = df_clean.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Descargar datos como CSV",
                     data=csv_data,
-                    file_name="reporte_detectores_ejes.csv",
+                    file_name=csv_filename,
                     mime="text/csv"
                 )
                 
