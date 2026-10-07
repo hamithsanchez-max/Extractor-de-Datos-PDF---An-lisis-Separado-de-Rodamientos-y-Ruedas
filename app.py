@@ -20,6 +20,14 @@ st.markdown("Visualización segregada para **Bearing East/West** (Rodamientos) y
 # Nombres estándar de las columnas del reporte SmartScan
 STANDARD_COLUMNS = ["Car", "Axle", "Bearing_East", "Bearing_West", "Wheel_East", "Wheel_West", "ON", "OFF", "PW1", "PW2", "Alarms"]
 
+# Función para convertir DataFrame a un archivo Excel (.xlsx) en memoria
+def convert_df_to_excel(df, sheet_name="Datos_Extraidos"):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    processed_data = output.getvalue()
+    return processed_data
+
 @st.cache_data
 def parse_pdf(file_bytes):
     parsed_data = []
@@ -79,7 +87,6 @@ uploaded_file = st.sidebar.file_uploader("Selecciona un archivo PDF", type=["pdf
 
 if uploaded_file is not None:
     try:
-        # --- CAPTURA DEL TÍTULO / NOMBRE DEL ARCHIVO PDF ---
         pdf_title = uploaded_file.name
         
         file_bytes = uploaded_file.read()
@@ -88,11 +95,9 @@ if uploaded_file is not None:
         if df_raw.empty:
             st.warning(f"⚠️ No se pudieron extraer datos del archivo **{pdf_title}**. Verifica que el reporte sea un documento de detectores wayside.")
         else:
-            # Notificación en la barra lateral con el nombre del archivo
-            st.sidebar.success(f"✅ ¡Procesado con éxito!")
+            st.sidebar.success("✅ ¡Procesado con éxito!")
             st.sidebar.info(f"📄 **Archivo activo:**\n`{pdf_title}`")
             
-            # --- MOSTRAR TÍTULO DEL ARCHIVO EN EL ÁREA PRINCIPAL ---
             st.info(f"📋 **Reporte Analizado:** `{pdf_title}`")
             
             tab_dash, tab_data, tab_settings = st.tabs([
@@ -178,7 +183,6 @@ if uploaded_file is not None:
                     marker_color="#1F77B4"
                 ))
                 
-                # Filtrar alarmas asociadas a Rodamientos / Hot Box / Differential
                 b_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("bearing|box|diff", na=False)]
                 if not b_alarms.empty:
                     max_y_b = df_sorted[[b_east_col, b_west_col]].max().max()
@@ -226,7 +230,6 @@ if uploaded_file is not None:
                     marker_color="#2CA02C"
                 ))
                 
-                # Filtrar alarmas asociadas a Ruedas / Hot Wheel / Frenos
                 w_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("wheel|rueda|freno", na=False)]
                 if not w_alarms.empty:
                     max_y_w = df_sorted[[w_east_col, w_west_col]].max().max()
@@ -309,15 +312,30 @@ if uploaded_file is not None:
                 st.subheader(f"Tabla de Datos Extraídos - {pdf_title}")
                 st.dataframe(df_clean, use_container_width=True)
                 
-                # Nombre dinámico del archivo CSV para descarga
-                csv_filename = f"reporte_{pdf_title.replace('.pdf', '')}.csv"
-                csv_data = df_clean.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Descargar datos como CSV",
-                    data=csv_data,
-                    file_name=csv_filename,
-                    mime="text/csv"
-                )
+                # --- OPCIONES DE DESCARGA (EXCEL Y CSV) ---
+                col_dl1, col_dl2 = st.columns(2)
+                
+                base_filename = pdf_title.replace('.pdf', '')
+                
+                with col_dl1:
+                    # Descarga en formato Tabla Excel (.xlsx)
+                    excel_data = convert_df_to_excel(df_clean)
+                    st.download_button(
+                        label="📊 Descargar Tabla de Datos en Excel (.xlsx)",
+                        data=excel_data,
+                        file_name=f"reporte_{base_filename}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    
+                with col_dl2:
+                    # Descarga en formato CSV (.csv)
+                    csv_data = df_clean.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Descargar Datos en CSV (.csv)",
+                        data=csv_data,
+                        file_name=f"reporte_{base_filename}.csv",
+                        mime="text/csv"
+                    )
                 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
