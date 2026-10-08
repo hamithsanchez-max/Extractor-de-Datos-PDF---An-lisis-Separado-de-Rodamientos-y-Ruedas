@@ -6,3 +6,6 @@ matplotlib
 seaborn
 pdf2image
 plotly
+msal
+requests
+pymupdf
