@@ -137,8 +137,8 @@ if uploaded_file is not None:
             if df_clean["Eje_Num"].isna().all():
                 df_clean["Eje_Num"] = range(1, len(df_clean) + 1)
 
-            # Restricción a 150 ejes máximo
-            df_clean = df_clean[df_clean["Eje_Num"] <= 150].reset_index(drop=True)
+            # Restricción ampliada a 160 ejes máximo
+            df_clean = df_clean[df_clean["Eje_Num"] <= 160].reset_index(drop=True)
 
             cols_order = ["Car", "Eje_Num", b_east_col, b_west_col, w_east_col, w_west_col]
             remaining_cols = [c for c in df_clean.columns if c not in cols_order and c != axle_col]
@@ -203,7 +203,7 @@ if uploaded_file is not None:
                 fig_bearing.update_layout(
                     barmode="group",
                     title=f"Comparativa de Temperatura en Rodamientos ({pdf_title})",
-                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 150.5], showgrid=True),
+                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -250,7 +250,7 @@ if uploaded_file is not None:
                 fig_wheel.update_layout(
                     barmode="group",
                     title=f"Comparativa de Temperatura en Ruedas ({pdf_title})",
-                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 150.5], showgrid=True),
+                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
