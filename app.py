@@ -174,13 +174,15 @@ if uploaded_file is not None:
                     x=df_sorted["Eje_Num"],
                     y=df_sorted[b_east_col],
                     name=f"Bearing East ({b_east_col})",
-                    marker_color="#D62728"
+                    marker_color="#D62728",
+                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Bearing East<extra></extra>"
                 ))
                 fig_bearing.add_trace(go.Bar(
                     x=df_sorted["Eje_Num"],
                     y=df_sorted[b_west_col],
                     name=f"Bearing West ({b_west_col})",
-                    marker_color="#1F77B4"
+                    marker_color="#1F77B4",
+                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Bearing West<extra></extra>"
                 ))
                 
                 b_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("bearing|box|diff", na=False)]
@@ -196,8 +198,8 @@ if uploaded_file is not None:
                         marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
                         text=["🚨"] * len(b_alarms),
                         textposition="top center",
-                        hovertext=[f"Eje {row['Eje_Num']} - Alarma: {row['Alarm_Text']}" for _, row in b_alarms.iterrows()],
-                        hoverinfo="text"
+                        hovertemplate="<b>Eje %{x}</b><br>Alarma: %{hovertext}<extra></extra>",
+                        hovertext=b_alarms["Alarm_Text"]
                     ))
 
                 fig_bearing.update_layout(
@@ -206,7 +208,11 @@ if uploaded_file is not None:
                     xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hoverlabel=dict(
+                        font_size=14,
+                        font_family="Arial, sans-serif"
+                    )
                 )
                 st.plotly_chart(fig_bearing, use_container_width=True)
                 st.caption("📌 **Pie de página:** Lecturas de temperatura para los rodamientos Este (rojo) y Oeste (azul). Los iconos **🚨** indican alarmas críticas de rodamientos/cajas.")
@@ -221,13 +227,15 @@ if uploaded_file is not None:
                     x=df_sorted["Eje_Num"],
                     y=df_sorted[w_east_col],
                     name=f"Wheel East ({w_east_col})",
-                    marker_color="#9467BD"
+                    marker_color="#9467BD",
+                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Wheel East<extra></extra>"
                 ))
                 fig_wheel.add_trace(go.Bar(
                     x=df_sorted["Eje_Num"],
                     y=df_sorted[w_west_col],
                     name=f"Wheel West ({w_west_col})",
-                    marker_color="#2CA02C"
+                    marker_color="#2CA02C",
+                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Wheel West<extra></extra>"
                 ))
                 
                 w_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("wheel|rueda|freno", na=False)]
@@ -243,8 +251,8 @@ if uploaded_file is not None:
                         marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
                         text=["🚨"] * len(w_alarms),
                         textposition="top center",
-                        hovertext=[f"Eje {row['Eje_Num']} - Alarma Rueda: {row['Alarm_Text']}" for _, row in w_alarms.iterrows()],
-                        hoverinfo="text"
+                        hovertemplate="<b>Eje %{x}</b><br>Alarma Rueda: %{hovertext}<extra></extra>",
+                        hovertext=w_alarms["Alarm_Text"]
                     ))
 
                 fig_wheel.update_layout(
@@ -253,7 +261,11 @@ if uploaded_file is not None:
                     xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
                     yaxis=dict(title="Temperatura / Valor"),
                     height=400,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hoverlabel=dict(
+                        font_size=14,
+                        font_family="Arial, sans-serif"
+                    )
                 )
                 st.plotly_chart(fig_wheel, use_container_width=True)
                 st.caption("📌 **Pie de página:** Perfil térmico de las ruedas para los costados Este (púrpura) y Oeste (verde). Los iconos **🚨** indican ejes con alarmas de ruedas (*Hot Wheel*).")
@@ -282,7 +294,11 @@ if uploaded_file is not None:
                         title="Porcentaje Total: Bearing East vs West"
                     )
                     fig_b_pie.update_traces(texttemplate='%{x:.1f}%', textposition='outside')
-                    fig_b_pie.update_layout(showlegend=False, height=280)
+                    fig_b_pie.update_layout(
+                        showlegend=False, 
+                        height=280,
+                        hoverlabel=dict(font_size=14, font_family="Arial, sans-serif")
+                    )
                     st.plotly_chart(fig_b_pie, use_container_width=True)
                     st.caption("📌 **Pie de página:** Proporción acumulada global del calor en rodamientos entre el lado Este (rojo) y Oeste (azul).")
                         
@@ -304,7 +320,11 @@ if uploaded_file is not None:
                         title="Porcentaje Total: Wheel East vs West"
                     )
                     fig_w_pie.update_traces(texttemplate='%{x:.1f}%', textposition='outside')
-                    fig_w_pie.update_layout(showlegend=False, height=280)
+                    fig_w_pie.update_layout(
+                        showlegend=False, 
+                        height=280,
+                        hoverlabel=dict(font_size=14, font_family="Arial, sans-serif")
+                    )
                     st.plotly_chart(fig_w_pie, use_container_width=True)
                     st.caption("📌 **Pie de página:** Proporción acumulada global del calor en ruedas entre el lado Este (púrpura) y Oeste (verde).")
 
