@@ -1,0 +1,1 @@
+the file pdf extractor will work with SMARTSCAN NG 2300 HOT BEARING AND HOT WHEEL for a train that pass over a DETECTOR, will show graphic with each of the wheel and bearing temperatures in Fahrenheit dregrees. 
