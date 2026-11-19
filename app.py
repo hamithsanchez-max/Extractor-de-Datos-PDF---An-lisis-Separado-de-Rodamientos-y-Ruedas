@@ -292,7 +292,7 @@ if uploaded_file is not None:
                 # SECCIÓN 2: WHEELS
                 st.subheader(f"🛞 2. Lecturas de Ruedas - {pdf_title}")
 
-               fig_wheel = go.Figure()
+               
                 fig_wheel.add_trace(
                     go.Bar(
                         x=df_sorted["Eje_Num"],
