@@ -34,11 +34,10 @@ def parse_pdf(file_bytes):
     parsed_data = []
     summary_alarms = []
     current_car = None
-    in_alarm_summary = False
 
     ignore_keywords = [
         "train details", "milepost", "scanner performance", "alarm limits",
-        "system alarms", "integrity failures",
+        "system alarms", "integrity failures", "axle alarm summary",
         "resistor", "software version", "bearing", "wheel"
     ]
 
@@ -53,37 +52,19 @@ def parse_pdf(file_bytes):
                 if not line_str:
                     continue
 
-                low_line = line_str.lower()
-
-                # Detectar sección de resumen de alarmas del reporte SmartScan
-                if "axle alarm summary" in low_line:
-                    in_alarm_summary = True
-                    continue
-
-                if in_alarm_summary:
-                    if any(kw in low_line for kw in ["system alarms", "integrity failures", "scanner performance", "software version", "end of report"]):
-                        in_alarm_summary = False
-                    else:
-                        # Capturar líneas de alarma del resumen (ej. "36 Hot Wheel East..." o "Axle 36 ...")
-                        m_alarm = re.match(r"^(?:axle\s*)?(\d{1,3})\s+(.+)$", line_str, re.IGNORECASE)
-                        if m_alarm:
-                            eje_al = int(m_alarm.group(1))
-                            desc_al = m_alarm.group(2).strip()
-                            if eje_al <= 160 and not desc_al.isdigit():
-                                summary_alarms.append((eje_al, desc_al))
-                        continue
-
                 tokens = line_str.split()
-
-                if any(kw in low_line for kw in ignore_keywords):
-                    continue
+                low_line = line_str.lower()
 
                 numeric_tokens = [
                     t for t in tokens
                     if re.match(r"^(-?\d+(\.\d+)?[*a-zA-Z]*|-{2,})$", t)
                 ]
 
+                # 1. Filas principales de datos de ejes (8 o más valores)
                 if len(numeric_tokens) >= 8:
+                    if any(kw in low_line for kw in ignore_keywords):
+                        continue
+
                     t0_clean = re.sub(r"[^0-9]", "", tokens[0])
                     t1_clean = re.sub(r"[^0-9]", "", tokens[1]) if len(tokens) > 1 else ""
 
@@ -105,6 +86,16 @@ def parse_pdf(file_bytes):
                         row = row[:10] + [alarms_text]
 
                     parsed_data.append(row)
+
+                # 2. Líneas de resumen de alarmas (ej. Axle Alarm Summary con Eje 36)
+                elif any(w in low_line for w in ["hot", "warm", "wheel", "bearing", "alarm", "dragging"]):
+                    if any(kw in low_line for kw in ["alarm limits", "axle alarm summary", "system alarms"]):
+                        continue
+                    m_axle = re.search(r"\b(?:axle\s*)?(\d{1,3})\b", line_str, re.IGNORECASE)
+                    if m_axle:
+                        eje_al = int(m_axle.group(1))
+                        if 1 <= eje_al <= 160:
+                            summary_alarms.append((eje_al, line_str))
 
     if not parsed_data:
         return pd.DataFrame(), summary_alarms
@@ -172,7 +163,7 @@ if uploaded_file is not None:
             df_clean = df_clean[cols_order + remaining_cols]
             df_sorted = df_clean.sort_values(by="Eje_Num")
 
-            # Consolidar alarmas tanto de la tabla de ejes como del resumen del reporte (ej. Eje 36)
+            # Consolidar alarmas de tabla + resumen del PDF (incluye Eje 36) sin pintarlas en las gráficas
             combined_alarms = {}
             if alarm_col != "Ninguna":
                 df_sorted["Alarm_Text"] = df_sorted[alarm_col].astype(str).str.strip()
@@ -185,17 +176,14 @@ if uploaded_file is not None:
                 if eje_al not in combined_alarms:
                     combined_alarms[eje_al] = desc_al
                 elif desc_al not in combined_alarms[eje_al]:
-                    combined_alarms[eje_al] += f" ({desc_al})"
+                    combined_alarms[eje_al] += f" | {desc_al}"
 
             with tab_dash:
                 st.write("---")
                 if combined_alarms:
-                    st.error(f"🚨 **Se registraron {len(combined_alarms)} alarma(s) en el reporte {pdf_title}:**")
-                    alarm_items = [
-                        f"**Eje {eje}**: {desc}"
-                        for eje, desc in sorted(combined_alarms.items())
-                    ]
-                    st.markdown(", ".join(alarm_items))
+                    st.error(f"🚨 **Alarmas detectadas en el reporte {pdf_title} ({len(combined_alarms)}):**")
+                    for eje, desc in sorted(combined_alarms.items()):
+                        st.markdown(f"- **Eje {eje}:** {desc}")
 
                 st.write("---")
                 st.subheader(f"🔥 1. Lecturas de Rodamientos - {pdf_title}")
