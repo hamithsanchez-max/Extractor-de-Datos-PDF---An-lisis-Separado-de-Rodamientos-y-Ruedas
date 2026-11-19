@@ -292,7 +292,20 @@ if uploaded_file is not None:
                 # SECCIÓN 2: WHEELS
                 st.subheader(f"🛞 2. Lecturas de Ruedas - {pdf_title}")
 
-                fig_wheel = go.Figure()
-                fig_wheel.add_trace(go.Bar(
-                    x=df_sorted["Eje_Num"],
-                    y=df_sorted
+               fig_wheel = go.Figure()
+                fig_wheel.add_trace(
+                    go.Bar(
+                        x=df_sorted["Eje_Num"],
+                        y=df_sorted[w_east_col],
+                        name=f"Wheel East ({w_east_col})",
+                        marker_color="#9467BD"
+                    )
+                )
+                fig_wheel.add_trace(
+                    go.Bar(
+                        x=df_sorted["Eje_Num"],
+                        y=df_sorted[w_west_col],
+                        name=f"Wheel West ({w_west_col})",
+                        marker_color="#2CA02C"
+                    )
+                )
