@@ -1,364 +1,314 @@
 import streamlit as st
-import pdfplumber
 import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-import re
-from io import BytesIO
+import sqlite3
+from datetime import datetime
+import os
+from database import init_db
 
-# Configuración inicial de la página
-st.set_page_config(
-    page_title="PDF Extractor - Tren de Carga (Rodamientos y Ruedas)",
-    page_icon="🚆",
-    layout="wide"
-)
+# Configuración inicial de Streamlit
+st.set_page_config(page_title="Control General de Turno - EOSR", layout="wide")
 
-st.title("🚆 Extractor de Datos PDF - Análisis Separado de Rodamientos y Ruedas")
-st.markdown("Visualización segregada para **Bearing East/West** (Rodamientos) y **Wheel East/West** (Ruedas) por eje de tren.")
+# Inicialización de la base de datos
+init_db()
 
-# Nombres estándar de las columnas del reporte SmartScan
-STANDARD_COLUMNS = ["Car", "Axle", "Bearing_East", "Bearing_West", "Wheel_East", "Wheel_West", "ON", "OFF", "PW1", "PW2", "Alarms"]
+def get_connection():
+    return sqlite3.connect('operaciones_terminal.db')
 
-# Función para convertir DataFrame a un archivo Excel (.xlsx) en memoria
-def convert_df_to_excel(df, sheet_name="Datos_Extraidos"):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-    processed_data = output.getvalue()
-    return processed_data
-
-@st.cache_data
-def parse_pdf(file_bytes):
-    parsed_data = []
-    current_car = None
-
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text(layout=False)
-            if not text:
-                continue
-
-            lines = text.split("\n")
-            for line in lines:
-                line_str = line.strip()
-                if not line_str:
-                    continue
-
-                tokens = line_str.split()
-
-                # Ignorar encabezados y metadatos del reporte
-                if any(kw in line_str.lower() for kw in ["train details", "milepost", "scanner performance", "alarm limits", "system alarms", "integrity failures", "axle alarm summary", "resistor", "software version", "bearing", "wheel"]):
-                    continue
-
-                numeric_tokens = [t for t in tokens if re.match(r'^-?\d+(\.\d+)?$', t)]
-                
-                if len(numeric_tokens) >= 8:
-                    if len(tokens) >= 10 and tokens[0].isdigit() and int(tokens[0]) < 100 and tokens[1].isdigit():
-                        current_car = tokens[0]
-                        axle = tokens[1]
-                        rest = tokens[2:]
-                    elif tokens[0].isdigit():
-                        axle = tokens[0]
-                        rest = tokens[1:]
-                    else:
-                        continue
-
-                    row = [current_car, axle] + rest
-                    
-                    if len(row) < len(STANDARD_COLUMNS):
-                        row += [""] * (len(STANDARD_COLUMNS) - len(row))
-                    elif len(row) > len(STANDARD_COLUMNS):
-                        alarms_text = " ".join(row[10:])
-                        row = row[:10] + [alarms_text]
-
-                    parsed_data.append(row)
-
-    if not parsed_data:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(parsed_data, columns=STANDARD_COLUMNS)
-    df["Car"] = df["Car"].replace(r'^\s*$', np.nan, regex=True).ffill()
-    
-    return df
-
-st.sidebar.header("📁 Cargar Documento")
-uploaded_file = st.sidebar.file_uploader("Selecciona un archivo PDF", type=["pdf"])
-
-if uploaded_file is not None:
+def exportar_y_guardar_excel():
+    """Lee las tablas de SQLite y las guarda en un libro consolidado de Excel."""
+    conn = get_connection()
     try:
-        pdf_title = uploaded_file.name
+        df_cabecera = pd.read_sql_query("SELECT * FROM cabecera_turno", conn)
+        df_equipos = pd.read_sql_query("SELECT * FROM control_equipos", conn)
+        df_trenes = pd.read_sql_query("SELECT * FROM registro_trenes", conn)
+        df_lineas = pd.read_sql_query("SELECT * FROM control_lineas", conn)
+        df_tractores = pd.read_sql_query("SELECT * FROM tractores_radios", conn)
         
-        file_bytes = uploaded_file.read()
-        df_raw = parse_pdf(file_bytes)
-        
-        if df_raw.empty:
-            st.warning(f"⚠️ No se pudieron extraer datos del archivo **{pdf_title}**. Verifica que el reporte sea un documento de detectores wayside.")
-        else:
-            st.sidebar.success("✅ ¡Procesado con éxito!")
-            st.sidebar.info(f"📄 **Archivo activo:**\n`{pdf_title}`")
+        with pd.ExcelWriter('Consolidado_Operaciones_EOSR.xlsx', engine='openpyxl') as writer:
+            df_cabecera.to_excel(writer, sheet_name='Cabecera_Turnos', index=False)
+            df_equipos.to_excel(writer, sheet_name='Control_Equipos', index=False)
+            df_trenes.to_excel(writer, sheet_name='Registro_Trenes', index=False)
+            df_lineas.to_excel(writer, sheet_name='Control_Lineas', index=False)
+            df_tractores.to_excel(writer, sheet_name='Tractores_Radios', index=False)
             
-            st.info(f"📋 **Reporte Analizado:** `{pdf_title}`")
-            
-            tab_dash, tab_data, tab_settings = st.tabs([
-                "📊 Gráficas Separadas (Bearing vs Wheel)", 
-                "📋 Datos Extraídos", 
-                "⚙️ Configuración de Columnas"
-            ])
-            
-            cols_list = list(df_raw.columns)
-            
-            with tab_settings:
-                st.subheader("Asignación de Columnas del PDF")
-                st.info("Valida o ajusta las columnas asignadas automáticamente.")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("### 🚂 Identificador y Rodamientos (Bearings)")
-                    axle_col = st.selectbox("Columna de Número de Eje", options=cols_list, index=cols_list.index("Axle") if "Axle" in cols_list else 1)
-                    b_east_col = st.selectbox("Bearing East", options=cols_list, index=cols_list.index("Bearing_East") if "Bearing_East" in cols_list else 2)
-                    b_west_col = st.selectbox("Bearing West", options=cols_list, index=cols_list.index("Bearing_West") if "Bearing_West" in cols_list else 3)
-
-                with col2:
-                    st.markdown("### 🛞 Ruedas y Alarmas")
-                    w_east_col = st.selectbox("Wheel East", options=cols_list, index=cols_list.index("Wheel_East") if "Wheel_East" in cols_list else 4)
-                    w_west_col = st.selectbox("Wheel West", options=cols_list, index=cols_list.index("Wheel_West") if "Wheel_West" in cols_list else 5)
-                    alarm_col = st.selectbox("Columna de Alarmas (Alarms)", options=["Ninguna"] + cols_list, index=cols_list.index("Alarms") + 1 if "Alarms" in cols_list else 0)
-
-            df_clean = df_raw.copy()
-            
-            numeric_cols = [b_east_col, b_west_col, w_east_col, w_west_col]
-            for col in numeric_cols:
-                df_clean[col] = pd.to_numeric(df_clean[col].astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
-
-            df_clean["Eje_Num"] = pd.to_numeric(df_clean[axle_col], errors="coerce")
-            
-            if df_clean["Eje_Num"].isna().all():
-                df_clean["Eje_Num"] = range(1, len(df_clean) + 1)
-
-            # Restricción ampliada a 160 ejes máximo
-            df_clean = df_clean[df_clean["Eje_Num"] <= 160].reset_index(drop=True)
-
-            cols_order = ["Car", "Eje_Num", b_east_col, b_west_col, w_east_col, w_west_col]
-            remaining_cols = [c for c in df_clean.columns if c not in cols_order and c != axle_col]
-            df_clean = df_clean[cols_order + remaining_cols]
-
-            df_sorted = df_clean.sort_values(by="Eje_Num")
-
-            # Procesamiento de texto de alarmas
-            if alarm_col != "Ninguna":
-                df_sorted["Alarm_Text"] = df_sorted[alarm_col].astype(str).str.strip()
-                df_sorted["Has_Alarm"] = df_sorted["Alarm_Text"].apply(lambda x: True if x != "" and x.lower() not in ["nan", "none", "0"] else False)
-            else:
-                df_sorted["Alarm_Text"] = ""
-                df_sorted["Has_Alarm"] = False
-
-            with tab_dash:
-                st.write("---")
-                
-                # Resumen superior de alarmas
-                alarms_df = df_sorted[df_sorted["Has_Alarm"]]
-                if not alarms_df.empty:
-                    st.error(f"🚨 **Se registraron {len(alarms_df)} alarma(s) en el reporte {pdf_title}:**")
-                    alarm_list_str = ", ".join([f"**Eje {row['Eje_Num']}**: {row['Alarm_Text']}" for _, row in alarms_df.iterrows()])
-                    st.markdown(alarm_list_str)
-
-                st.write("---")
-
-                # SECCIÓN 1: BEARINGS
-                st.subheader(f"🔥 1. Lecturas de Rodamientos - {pdf_title}")
-                
-                fig_bearing = go.Figure()
-                fig_bearing.add_trace(go.Bar(
-                    x=df_sorted["Eje_Num"],
-                    y=df_sorted[b_east_col],
-                    name=f"Bearing East ({b_east_col})",
-                    marker_color="#D62728",
-                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Bearing East<extra></extra>"
-                ))
-                fig_bearing.add_trace(go.Bar(
-                    x=df_sorted["Eje_Num"],
-                    y=df_sorted[b_west_col],
-                    name=f"Bearing West ({b_west_col})",
-                    marker_color="#1F77B4",
-                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Bearing West<extra></extra>"
-                ))
-                
-                b_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("bearing|box|diff", na=False)]
-                if not b_alarms.empty:
-                    max_y_b = df_sorted[[b_east_col, b_west_col]].max().max()
-                    y_pos_b = max_y_b * 1.08 if not np.isnan(max_y_b) and max_y_b > 0 else 50
-                    
-                    fig_bearing.add_trace(go.Scatter(
-                        x=b_alarms["Eje_Num"],
-                        y=[y_pos_b] * len(b_alarms),
-                        mode="markers+text",
-                        name="🚨 ALARMA BEARING",
-                        marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
-                        text=["🚨"] * len(b_alarms),
-                        textposition="top center",
-                        hovertemplate="<b>Eje %{x}</b><br>Alarma: %{hovertext}<extra></extra>",
-                        hovertext=b_alarms["Alarm_Text"]
-                    ))
-
-                fig_bearing.update_layout(
-                    barmode="group",
-                    title=f"Comparativa de Temperatura en Rodamientos ({pdf_title})",
-                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
-                    yaxis=dict(title="Temperatura / Valor"),
-                    height=400,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    hoverlabel=dict(
-                        font_size=14,
-                        font_family="Arial, sans-serif"
-                    )
-                )
-                st.plotly_chart(fig_bearing, use_container_width=True)
-                st.caption("📌 **Pie de página:** Lecturas de temperatura para los rodamientos Este (rojo) y Oeste (azul). Los iconos **🚨** indican alarmas críticas de rodamientos/cajas.")
-
-                st.write("---")
-                
-                # SECCIÓN 2: WHEELS
-                st.subheader(f"🛞 2. Lecturas de Ruedas - {pdf_title}")
-                
-                fig_wheel = go.Figure()
-                fig_wheel.add_trace(go.Bar(
-                    x=df_sorted["Eje_Num"],
-                    y=df_sorted[w_east_col],
-                    name=f"Wheel East ({w_east_col})",
-                    marker_color="#9467BD",
-                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Wheel East<extra></extra>"
-                ))
-                fig_wheel.add_trace(go.Bar(
-                    x=df_sorted["Eje_Num"],
-                    y=df_sorted[w_west_col],
-                    name=f"Wheel West ({w_west_col})",
-                    marker_color="#2CA02C",
-                    hovertemplate="<b>Eje %{x}</b><br>Temp: %{y:.1f}<br>Wheel West<extra></extra>"
-                ))
-                
-                w_alarms = df_sorted[df_sorted["Has_Alarm"] & df_sorted["Alarm_Text"].str.lower().str.contains("wheel|rueda|freno", na=False)]
-                if not w_alarms.empty:
-                    max_y_w = df_sorted[[w_east_col, w_west_col]].max().max()
-                    y_pos_w = max_y_w * 1.08 if not np.isnan(max_y_w) and max_y_w > 0 else 50
-                    
-                    fig_wheel.add_trace(go.Scatter(
-                        x=w_alarms["Eje_Num"],
-                        y=[y_pos_w] * len(w_alarms),
-                        mode="markers+text",
-                        name="🚨 ALARMA WHEEL",
-                        marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
-                        text=["🚨"] * len(w_alarms),
-                        textposition="top center",
-                        hovertemplate="<b>Eje %{x}</b><br>Alarma Rueda: %{hovertext}<extra></extra>",
-                        hovertext=w_alarms["Alarm_Text"]
-                    ))
-
-                fig_wheel.update_layout(
-                    barmode="group",
-                    title=f"Comparativa de Temperatura en Ruedas ({pdf_title})",
-                    xaxis=dict(title="Número de Eje", dtick=5, range=[0.5, 160.5], showgrid=True),
-                    yaxis=dict(title="Temperatura / Valor"),
-                    height=400,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    hoverlabel=dict(
-                        font_size=14,
-                        font_family="Arial, sans-serif"
-                    )
-                )
-                st.plotly_chart(fig_wheel, use_container_width=True)
-                st.caption("📌 **Pie de página:** Perfil térmico de las ruedas para los costados Este (púrpura) y Oeste (verde). Los iconos **🚨** indican ejes con alarmas de ruedas (*Hot Wheel*).")
-
-                st.write("---")
-
-                # SECCIÓN 3: DISTRIBUCIÓN PORCENTUAL
-                st.subheader("📊 Distribución Porcentual Horizontal por Componente")
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    st.markdown("#### Distribución en Rodamientos (Bearings)")
-                    b_totals = df_clean[[b_east_col, b_west_col]].sum(numeric_only=True)
-                    df_b_sum = pd.DataFrame({"Componente": b_totals.index, "Suma_Lecturas": b_totals.values})
-                    total_b = df_b_sum["Suma_Lecturas"].sum()
-                    df_b_sum["Porcentaje"] = (df_b_sum["Suma_Lecturas"] / total_b * 100) if total_b > 0 else 0
-                    
-                    fig_b_pie = px.bar(
-                        df_b_sum,
-                        x="Porcentaje",
-                        y="Componente",
-                        orientation="h",
-                        text_auto=".1f",
-                        color="Componente",
-                        color_discrete_sequence=["#D62728", "#1F77B4"],
-                        title="Porcentaje Total: Bearing East vs West"
-                    )
-                    fig_b_pie.update_traces(texttemplate='%{x:.1f}%', textposition='outside')
-                    fig_b_pie.update_layout(
-                        showlegend=False, 
-                        height=280,
-                        hoverlabel=dict(font_size=14, font_family="Arial, sans-serif")
-                    )
-                    st.plotly_chart(fig_b_pie, use_container_width=True)
-                    st.caption("📌 **Pie de página:** Proporción acumulada global del calor en rodamientos entre el lado Este (rojo) y Oeste (azul).")
-                        
-                with c2:
-                    st.markdown("#### Distribución en Ruedas (Wheels)")
-                    w_totals = df_clean[[w_east_col, w_west_col]].sum(numeric_only=True)
-                    df_w_sum = pd.DataFrame({"Componente": w_totals.index, "Suma_Lecturas": w_totals.values})
-                    total_w = df_w_sum["Suma_Lecturas"].sum()
-                    df_w_sum["Porcentaje"] = (df_w_sum["Suma_Lecturas"] / total_w * 100) if total_w > 0 else 0
-                    
-                    fig_w_pie = px.bar(
-                        df_w_sum,
-                        x="Porcentaje",
-                        y="Componente",
-                        orientation="h",
-                        text_auto=".1f",
-                        color="Componente",
-                        color_discrete_sequence=["#9467BD", "#2CA02C"],
-                        title="Porcentaje Total: Wheel East vs West"
-                    )
-                    fig_w_pie.update_traces(texttemplate='%{x:.1f}%', textposition='outside')
-                    fig_w_pie.update_layout(
-                        showlegend=False, 
-                        height=280,
-                        hoverlabel=dict(font_size=14, font_family="Arial, sans-serif")
-                    )
-                    st.plotly_chart(fig_w_pie, use_container_width=True)
-                    st.caption("📌 **Pie de página:** Proporción acumulada global del calor en ruedas entre el lado Este (púrpura) y Oeste (verde).")
-
-            with tab_data:
-                st.subheader(f"Tabla de Datos Extraídos - {pdf_title}")
-                st.dataframe(df_clean, use_container_width=True)
-                
-                # --- OPCIONES DE DESCARGA (EXCEL Y CSV) ---
-                col_dl1, col_dl2 = st.columns(2)
-                
-                base_filename = pdf_title.replace('.pdf', '')
-                
-                with col_dl1:
-                    # Descarga en formato Tabla Excel (.xlsx)
-                    excel_data = convert_df_to_excel(df_clean)
-                    st.download_button(
-                        label="📊 Descargar Tabla de Datos en Excel (.xlsx)",
-                        data=excel_data,
-                        file_name=f"reporte_{base_filename}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                    
-                with col_dl2:
-                    # Descarga en formato CSV (.csv)
-                    csv_data = df_clean.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Descargar Datos en CSV (.csv)",
-                        data=csv_data,
-                        file_name=f"reporte_{base_filename}.csv",
-                        mime="text/csv"
-                    )
-                
+        return True
     except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+        st.error(f"Error al exportar a Excel: {e}")
+        return False
+    finally:
+        conn.close()
 
-else:
-    st.info("👈 Por favor carga un archivo PDF desde el panel lateral para iniciar el análisis.")
+st.title("🚆 Control Operativo de Turno (EOSR)")
+
+# Pestañas principales
+tab_nuevo, tab_kpi, tab_registros = st.tabs(["📝 Llenar Reporte de Turno", "📊 KPIs y Rendimiento", "📂 Histórico y Descargas"])
+
+# ==========================================
+# --- TAB 1: FORMULARIO COMPLETO DE TURNO ---
+# ==========================================
+with tab_nuevo:
+    st.subheader("1. Información General del Turno")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        terminal = st.selectbox("Terminal", ["PACIFICO", "ATLANTICO"])
+        fecha = st.date_input("Día", datetime.now())
+    with col2:
+        horario = st.selectbox("Horario/Turno", ["16:00 a 23:59", "00:00 a 08:00", "08:00 a 16:00"])
+    with col3:
+        hora_desde = st.time_input("Desde", datetime.strptime("16:00", "%H:%M"))
+        hora_hasta = st.time_input("Hasta", datetime.strptime("23:59", "%H:%M"))
+    with col4:
+        supervisor = st.text_input("Supervisor en Turno", placeholder="Ej: J.L.G")
+
+    st.markdown("---")
+
+    # SECCIÓN EQUIPOS DINÁMICOS CON SELECTOR SI/NO COMPACTO
+    st.subheader(f"2. Equipos del Terminal ({terminal})")
+    
+    equipos_pit = [
+        ("R1 MJ 850P", "PIT"), ("R2 MJ 900P", "PIT"), ("R3 MJ 900P", "PIT"), 
+        ("R7 MJ 900P", "PIT"), ("FANTUZY 1", "PIT"), ("T3 - TAYLOR 974BIG", "PIT"), 
+        ("T4 - TAYLOR 974BIG", "PIT"), ("T7 - TAYLOR 974BIG", "PIT"), ("T9 - TAYLOR 974 BIG", "PIT")
+    ]
+    
+    equipos_ait = [
+        ("R5 MJ 900P", "AIT"), ("R6 MJ 900P", "AIT"), ("R8 MJ 900P", "AIT"), 
+        ("M - 1", "AIT"), ("T5 - TAYLOR 974BIG", "AIT"), ("T6 - TAYLOR 974BIG", "AIT"), 
+        ("T8 - TAYLOR 974BIG", "AIT")
+    ]
+    
+    equipos_veh = [("VEH 1", "VEH"), ("VEH 2", "VEH"), ("VEH 3", "VEH"), ("VEH 4", "VEH")]
+
+    if terminal == "PACIFICO":
+        lista_equipos_activa = equipos_pit + equipos_veh
+    else:
+        lista_equipos_activa = equipos_ait + equipos_veh
+
+    equipos_data = []
+    conteo_disponibles = 0
+
+    with st.expander(f"Ver y Modificar Estado de Equipos - {terminal}", expanded=True):
+        st.write("##### Registro de Disponibilidad, Tiempos de Falla/Reparación y Gaseo")
+        
+        for eq_key, eq_codigo in lista_equipos_activa:
+            if eq_codigo == "VEH":
+                col_title1, col_title2, col_disp_v = st.columns([1, 2, 1])
+                col_title1.markdown(f"**{eq_codigo}**")
+                eq_nombre = col_title2.text_input("Número/ID de Vehículo", placeholder="Ej: 336", key=f"name_{eq_key}")
+                disp = col_disp_v.selectbox("Disponible", ["SI", "NO"], key=f"disp_{eq_key}")
+            else:
+                st.markdown(f"**{eq_codigo} - {eq_key}**")
+                eq_nombre = eq_key
+                
+                # Se coloca el selector de disponibilidad en una columna compacta (ancho 1/4)
+                col_d, col_v = st.columns([1, 3])
+                disp = col_d.selectbox(f"Disponibilidad", ["SI", "NO"], key=f"disp_{eq_key}")
+
+            if disp == "SI":
+                conteo_disponibles += 1
+
+            # Alineación horizontal pareja para los tiempos de falla y reparación
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+            f_operador = col_f1.text_input("Falla Operador (Hora)", key=f"fop_{eq_key}", placeholder="HH:MM")
+            f_mecanico = col_f2.text_input("Falla Mecánico (Hora)", key=f"fmec_{eq_key}", placeholder="HH:MM")
+            f_desp = col_f3.text_input("Falla Despachador (Hora)", key=f"fdesp_{eq_key}", placeholder="HH:MM")
+            h_rep = col_f4.text_input("Reparación (Hora)", key=f"hrep_{eq_key}", placeholder="HH:MM")
+
+            col_g1, col_g2, col_g3 = st.columns([2, 1, 1])
+            operador = col_g1.text_input("Nombre del Operador", key=f"op_{eq_key}")
+            gaseo = col_g2.number_input("Gaseo (Galones)", min_value=0.0, step=10.0, key=f"gas_{eq_key}")
+            h_gaseo = col_g3.text_input("Horario Gaseo", key=f"hgas_{eq_key}")
+            
+            st.markdown("---")
+            equipos_data.append((eq_codigo, eq_nombre, disp, f_operador, f_mecanico, f_desp, h_rep, operador, gaseo, h_gaseo))
+
+        # Indicador de suma total de disponibilidad
+        st.metric("Disponibilidad Total de Equipos en Servicio", f"{conteo_disponibles} / {len(lista_equipos_activa)}")
+
+    st.markdown("---")
+
+    # SECCIÓN TRENES NORTE Y SUR
+    st.subheader("3. Operación de Trenes (Ruta Norte y Ruta Sur)")
+    col_norte, col_sur = st.columns(2)
+    
+    with col_norte:
+        st.markdown("### 🟢 Trenes Ruta Norte")
+        with st.form("form_norte", clear_on_submit=False):
+            t_num = st.text_input("Tren # / Set #", placeholder="Ej: 508 / 1")
+            enc_480v = st.text_input("Encendido 480V", placeholder="Ej: 17:44:00 o XXX")
+            peso = st.number_input("Peso Total", min_value=0.0)
+            ini_carga = st.text_input("Inicio de Carga", placeholder="Ej: T.A ó 16:30:00")
+            fin_carga = st.text_input("Fin de Carga", placeholder="Ej: 19:40:00")
+            partida = st.text_input("Hora de Partida", placeholder="Ej: 19:42:00")
+            contenedores = st.text_input("Total Contenedores", placeholder="Ej: 106 (0)")
+            locom_cuad = st.text_input("Locomotoras / Cuadrilla")
+            track = st.text_input("Track / Comentarios", placeholder="Ej: TRACK 1W")
+            add_norte = st.form_submit_button("Añadir Tren Norte")
+            if add_norte:
+                st.session_state.setdefault('temp_trenes', []).append(('Norte', t_num, enc_480v, peso, ini_carga, fin_carga, partida, contenedores, locom_cuad, track))
+                st.success("Tren Norte agregado a la lista temporal del turno")
+
+    with col_sur:
+        st.markdown("### 🔴 Trenes Ruta Sur")
+        with st.form("form_sur", clear_on_submit=False):
+            t_num_s = st.text_input("Tren # / Set #", key="s1", placeholder="Ej: 505 / 5")
+            apag_480v = st.text_input("Apagado 480V / Hora Llegada", key="s2", placeholder="Ej: T.A ó 19:00:00")
+            peso_s = st.number_input("Peso Total", min_value=0.0, key="s3")
+            ini_desc = st.text_input("Inicio Descarga", key="s4", placeholder="Ej: T.A ó 17:40:00")
+            fin_carga_s = st.text_input("Fin de Carga", key="s5", placeholder="Ej: 21:25:00")
+            partida_s = st.text_input("Hora de Partida", key="s6")
+            contenedores_s = st.text_input("Total Contenedores", key="s7")
+            locom_cuad_s = st.text_input("Locomotoras / Cuadrilla", key="s8")
+            track_s = st.text_input("Track / Comentarios", key="s9", placeholder="Ej: TRACK 2W")
+            add_sur = st.form_submit_button("Añadir Tren Sur")
+            if add_sur:
+                st.session_state.setdefault('temp_trenes', []).append(('Sur', t_num_s, apag_480v, peso_s, ini_desc, fin_carga_s, partida_s, contenedores_s, locom_cuad_s, track_s))
+                st.success("Tren Sur agregado a la lista temporal del turno")
+
+    # Tabla temporal de trenes agregados
+    if 'temp_trenes' in st.session_state and st.session_state['temp_trenes']:
+        st.write("#### Trenes ingresados para este turno:")
+        df_temp = pd.DataFrame(st.session_state['temp_trenes'], columns=["Ruta", "Tren/Set", "480V/Llegada", "Peso", "Inicio", "Fin", "Partida", "Contenedores", "Locom/Cuadrilla", "Track"])
+        st.dataframe(df_temp, use_container_width=True)
+
+    st.markdown("---")
+
+    # SECCIÓN LÍNEAS Y LOCOMOTORAS
+    st.subheader("4. Locomotoras y Estado de Líneas")
+    lineas_list = ["Línea 1 Este", "Línea 1 Oeste", "Línea 2 Este", "Línea 2 Centro", "Línea 2 Oeste", "Línea 3", "Línea 4", "Sección I Límite"]
+    
+    lineas_data = []
+    with st.expander("Ver Estado de Líneas", expanded=False):
+        for lin in lineas_list:
+            cL1, cL2, cL3, cL4 = st.columns(4)
+            loc = cL1.text_input(f"{lin} - Locomotora", key=f"loc_{lin}")
+            set_n = cL2.text_input("Set #", key=f"set_{lin}")
+            tren_n = cL3.text_input("Tren #", key=f"trn_{lin}")
+            cond = cL4.selectbox("Condición", ["-", "NORTE", "SUR", "TREN VACIO", "MANTENIMIENTO", "TREN DE TRABAJO"], key=f"cond_{lin}")
+            lineas_data.append((lin, loc, set_n, tren_n, cond))
+
+    st.markdown("---")
+
+    # SECCIÓN NOVEDADES, REUNIONES, TRACTORES Y RADIOS
+    st.subheader("5. Reuniones, Demoras, Tractores y Radios")
+    colA, colB = st.columns(2)
+    with colA:
+        demoras = st.text_area("Demoras en turno / Banderas en patio")
+        reuniones = st.text_area("Reunión con el personal / Otras situaciones")
+    with colB:
+        cant_tractores = st.number_input("Cantidad de Tractores en turno", min_value=0, step=1)
+        radio_patio = st.selectbox("Radio Portátil de Patio #", ["SI", "NO"])
+        radio_asignado = st.text_input("Radio Asignado A:")
+        radio_hora = st.text_input("Hora Radio")
+
+    st.markdown("---")
+
+    # BOTÓN FINAL DE GUARDADO
+    if st.button("💾 GUARDAR Y ACTUALIZAR ARCHIVO DE EXCEL", type="primary", use_container_width=True):
+        conn = get_connection()
+        c = conn.cursor()
+        
+        # 1. Cabecera
+        c.execute("""INSERT INTO cabecera_turno 
+            (terminal, fecha, turno, hora_desde, hora_hasta, supervisor, demoras, reuniones) 
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (terminal, str(fecha), horario, str(hora_desde), str(hora_hasta), supervisor, demoras, reuniones))
+        id_turno = c.lastrowid
+        
+        # 2. Equipos
+        for eq_code, eq_name, disp, f_op, f_mec, f_desp, h_rep, op, gas, hgas in equipos_data:
+            c.execute("""INSERT INTO control_equipos 
+                (id_turno, codigo_terminal, equipo, disponible, falla_operador, falla_mecanico, falla_despachador, hora_reparacion, operador, gaseo_galones, hora_gaseo) 
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (id_turno, eq_code, eq_name, disp, f_op, f_mec, f_desp, h_rep, op, gas, hgas))
+            
+        # 3. Trenes
+        if 'temp_trenes' in st.session_state:
+            for ruta, t_num, v480, peso, ini, fin, part, cont, loc_cuad, trk in st.session_state['temp_trenes']:
+                c.execute("""INSERT INTO registro_trenes 
+                    (id_turno, ruta, numero_tren, estado_480v, peso_total, inicio_operacion, fin_operacion, hora_partida, contenedores, locomotoras_cuadrilla, track_comentarios) 
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (id_turno, ruta, t_num, v480, peso, ini, fin, part, cont, loc_cuad, trk))
+            st.session_state['temp_trenes'] = []
+            
+        # 4. Líneas
+        for lin, loc, set_n, tren_n, cond in lineas_data:
+            c.execute("""INSERT INTO control_lineas 
+                (id_turno, linea, locomotora, set_num, tren_num, condicion) 
+                VALUES (?,?,?,?,?,?)""",
+                (id_turno, lin, loc, set_n, tren_n, cond))
+            
+        # 5. Tractores y Radios
+        c.execute("""INSERT INTO tractores_radios 
+            (id_turno, hora_revision, cantidad_tractores, radio_patio, asignado_a, hora_radio) 
+            VALUES (?,?,?,?,?,?)""",
+            (id_turno, str(datetime.now().strftime("%H:%M:%S")), cant_tractores, radio_patio, radio_asignado, radio_hora))
+        
+        conn.commit()
+        conn.close()
+        
+        if exportar_y_guardar_excel():
+            st.balloons()
+            st.success(f"✅ Reporte de Turno #{id_turno} guardado. Equipos en servicio: {conteo_disponibles}.")
+
+# ==========================================
+# --- TAB 2: KPIS Y DASHBOARD ---
+# ==========================================
+with tab_kpi:
+    st.header("Indicadores de Rendimiento y Operación")
+    try:
+        conn = get_connection()
+        df_trenes = pd.read_sql_query("SELECT * FROM registro_trenes", conn)
+        df_equipos_kpi = pd.read_sql_query("SELECT * FROM control_equipos", conn)
+        conn.close()
+    except Exception:
+        df_trenes = pd.DataFrame()
+        df_equipos_kpi = pd.DataFrame()
+
+    if not df_trenes.empty:
+        colK1, colK2, colK3 = st.columns(3)
+        colK1.metric("Total Trenes Procesados", len(df_trenes))
+        colK2.metric("Trenes Ruta Norte", len(df_trenes[df_trenes['ruta'] == 'Norte']))
+        colK3.metric("Trenes Ruta Sur", len(df_trenes[df_trenes['ruta'] == 'Sur']))
+        
+        st.subheader("Detalle de Registros de Trenes")
+        st.dataframe(df_trenes, use_container_width=True)
+    else:
+        st.info("Aún no hay datos de trenes registrados para calcular KPIs.")
+
+# ==========================================
+# --- TAB 3: HISTÓRICO Y DESCARGA EXCEL ---
+# ==========================================
+with tab_registros:
+    st.header("Consultar Base de Datos y Descargar Excel Consolidado")
+    
+    if os.path.exists('Consolidado_Operaciones_EOSR.xlsx'):
+        with open('Consolidado_Operaciones_EOSR.xlsx', 'rb') as f:
+            st.download_button(
+                label="📥 DESCARGAR CONSOLIDADO EXCEL (.XLSX) PARA ANÁLISIS",
+                data=f,
+                file_name='Consolidado_Operaciones_EOSR.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                type="primary"
+            )
+    else:
+        st.warning("El archivo Excel consolidado se creará al guardar el primer registro de turno.")
+
+    st.markdown("---")
+    
+    try:
+        conn = get_connection()
+        df_cabecera = pd.read_sql_query("SELECT * FROM cabecera_turno", conn)
+        df_equipos_all = pd.read_sql_query("SELECT * FROM control_equipos", conn)
+        conn.close()
+    except Exception:
+        df_cabecera = pd.DataFrame()
+        df_equipos_all = pd.DataFrame()
+
+    if not df_cabecera.empty:
+        st.subheader("Histórico de Turnos Guardados")
+        st.dataframe(df_cabecera, use_container_width=True)
+        st.subheader("Histórico de Equipos Registrados")
+        st.dataframe(df_equipos_all, use_container_width=True)
+    else:
+        st.info("La base de datos se encuentra vacía actualmente.")
