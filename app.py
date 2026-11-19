@@ -32,10 +32,13 @@ def convert_df_to_excel(df, sheet_name="Datos_Extraidos"):
 @st.cache_data
 def parse_pdf(file_bytes):
     parsed_data = []
+    summary_alarms = []
     current_car = None
+    in_alarm_summary = False
+
     ignore_keywords = [
         "train details", "milepost", "scanner performance", "alarm limits",
-        "system alarms", "integrity failures", "axle alarm summary",
+        "system alarms", "integrity failures",
         "resistor", "software version", "bearing", "wheel"
     ]
 
@@ -50,9 +53,29 @@ def parse_pdf(file_bytes):
                 if not line_str:
                     continue
 
+                low_line = line_str.lower()
+
+                # Detectar sección de resumen de alarmas del reporte SmartScan
+                if "axle alarm summary" in low_line:
+                    in_alarm_summary = True
+                    continue
+
+                if in_alarm_summary:
+                    if any(kw in low_line for kw in ["system alarms", "integrity failures", "scanner performance", "software version", "end of report"]):
+                        in_alarm_summary = False
+                    else:
+                        # Capturar líneas de alarma del resumen (ej. "36 Hot Wheel East..." o "Axle 36 ...")
+                        m_alarm = re.match(r"^(?:axle\s*)?(\d{1,3})\s+(.+)$", line_str, re.IGNORECASE)
+                        if m_alarm:
+                            eje_al = int(m_alarm.group(1))
+                            desc_al = m_alarm.group(2).strip()
+                            if eje_al <= 160 and not desc_al.isdigit():
+                                summary_alarms.append((eje_al, desc_al))
+                        continue
+
                 tokens = line_str.split()
 
-                if any(kw in line_str.lower() for kw in ignore_keywords):
+                if any(kw in low_line for kw in ignore_keywords):
                     continue
 
                 numeric_tokens = [
@@ -84,11 +107,11 @@ def parse_pdf(file_bytes):
                     parsed_data.append(row)
 
     if not parsed_data:
-        return pd.DataFrame()
+        return pd.DataFrame(), summary_alarms
 
     df = pd.DataFrame(parsed_data, columns=STANDARD_COLUMNS)
     df["Car"] = df["Car"].replace(r"^\s*$", np.nan, regex=True).ffill()
-    return df
+    return df, summary_alarms
 
 
 st.sidebar.header("📁 Cargar Documento")
@@ -98,7 +121,7 @@ if uploaded_file is not None:
     try:
         pdf_title = uploaded_file.name
         file_bytes = uploaded_file.read()
-        df_raw = parse_pdf(file_bytes)
+        df_raw, summary_alarms = parse_pdf(file_bytes)
 
         if df_raw.empty:
             st.warning(f"⚠️ No se pudieron extraer datos del archivo **{pdf_title}**.")
@@ -149,21 +172,29 @@ if uploaded_file is not None:
             df_clean = df_clean[cols_order + remaining_cols]
             df_sorted = df_clean.sort_values(by="Eje_Num")
 
+            # Consolidar alarmas tanto de la tabla de ejes como del resumen del reporte (ej. Eje 36)
+            combined_alarms = {}
             if alarm_col != "Ninguna":
                 df_sorted["Alarm_Text"] = df_sorted[alarm_col].astype(str).str.strip()
-                df_sorted["Has_Alarm"] = df_sorted["Alarm_Text"].apply(
-                    lambda x: True if x != "" and x.lower() not in ["nan", "none", "0"] else False
-                )
-            else:
-                df_sorted["Alarm_Text"] = ""
-                df_sorted["Has_Alarm"] = False
+                for _, r in df_sorted.iterrows():
+                    txt = r["Alarm_Text"]
+                    if txt != "" and txt.lower() not in ["nan", "none", "0"]:
+                        combined_alarms[int(r["Eje_Num"])] = txt
+
+            for eje_al, desc_al in summary_alarms:
+                if eje_al not in combined_alarms:
+                    combined_alarms[eje_al] = desc_al
+                elif desc_al not in combined_alarms[eje_al]:
+                    combined_alarms[eje_al] += f" ({desc_al})"
 
             with tab_dash:
                 st.write("---")
-                alarms_df = df_sorted[df_sorted["Has_Alarm"]]
-                if not alarms_df.empty:
-                    st.error(f"🚨 **Se registraron {len(alarms_df)} alarma(s) en el reporte {pdf_title}:**")
-                    alarm_items = [f"**Eje {r['Eje_Num']}**: {r['Alarm_Text']}" for _, r in alarms_df.iterrows()]
+                if combined_alarms:
+                    st.error(f"🚨 **Se registraron {len(combined_alarms)} alarma(s) en el reporte {pdf_title}:**")
+                    alarm_items = [
+                        f"**Eje {eje}**: {desc}"
+                        for eje, desc in sorted(combined_alarms.items())
+                    ]
                     st.markdown(", ".join(alarm_items))
 
                 st.write("---")
@@ -186,25 +217,6 @@ if uploaded_file is not None:
                         marker_color="#1F77B4"
                     )
                 )
-
-                b_alarms = df_sorted[
-                    df_sorted["Has_Alarm"]
-                    & df_sorted["Alarm_Text"].str.lower().str.contains("bearing|box|diff", na=False)
-                ]
-                if not b_alarms.empty:
-                    max_y_b = df_sorted[[b_east_col, b_west_col]].max().max()
-                    y_pos_b = min(max_y_b * 1.05, 430) if not np.isnan(max_y_b) and max_y_b > 0 else 50
-                    fig_bearing.add_trace(
-                        go.Scatter(
-                            x=b_alarms["Eje_Num"],
-                            y=[y_pos_b] * len(b_alarms),
-                            mode="markers+text",
-                            name="🚨 ALARMA BEARING",
-                            marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
-                            text=["🚨"] * len(b_alarms),
-                            textposition="top center"
-                        )
-                    )
 
                 fig_bearing.update_layout(
                     barmode="group",
@@ -237,25 +249,6 @@ if uploaded_file is not None:
                         marker_color="#2CA02C"
                     )
                 )
-
-                w_alarms = df_sorted[
-                    df_sorted["Has_Alarm"]
-                    & df_sorted["Alarm_Text"].str.lower().str.contains("wheel|rueda|freno", na=False)
-                ]
-                if not w_alarms.empty:
-                    max_y_w = df_sorted[[w_east_col, w_west_col]].max().max()
-                    y_pos_w = min(max_y_w * 1.05, 430) if not np.isnan(max_y_w) and max_y_w > 0 else 50
-                    fig_wheel.add_trace(
-                        go.Scatter(
-                            x=w_alarms["Eje_Num"],
-                            y=[y_pos_w] * len(w_alarms),
-                            mode="markers+text",
-                            name="🚨 ALARMA WHEEL",
-                            marker=dict(symbol="diamond", size=11, color="red", line=dict(width=1, color="black")),
-                            text=["🚨"] * len(w_alarms),
-                            textposition="top center"
-                        )
-                    )
 
                 fig_wheel.update_layout(
                     barmode="group",
